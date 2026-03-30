@@ -72,6 +72,7 @@ class BroadcastStates(StatesGroup):
 
 class VideoNoteStates(StatesGroup):
     waiting_for_video_note = State()
+    confirming_video_note = State()
 
 # ---------- КЛАВИАТУРЫ ----------
 admin_main_kb = InlineKeyboardMarkup(
@@ -126,6 +127,15 @@ confirm_kb = InlineKeyboardMarkup(
 cancel_kb = InlineKeyboardMarkup(
     inline_keyboard=[
         [InlineKeyboardButton(text="❌ Отменить", callback_data="admin_cancel")]
+    ]
+)
+
+video_note_confirm_kb = InlineKeyboardMarkup(
+    inline_keyboard=[
+        [
+            InlineKeyboardButton(text="✅ Да, отправить всем", callback_data="vn_confirm_send"),
+            InlineKeyboardButton(text="❌ Отмена", callback_data="vn_cancel")
+        ]
     ]
 )
 
@@ -693,10 +703,31 @@ async def process_video_note_broadcast(message: types.Message, state: FSMContext
         return
 
     video_note_id = message.video_note.file_id
+    await state.update_data(video_note_id=video_note_id)
+    await state.set_state(VideoNoteStates.confirming_video_note)
+
+    # Предпросмотр
+    await message.answer(
+        f"👁 <b>Предпросмотр</b>\n\n"
+        f"👥 Получателей: <b>{len(users)}</b>\n\n"
+        f"Это видео будет отправлено всем пользователям. Подтвердите:",
+        parse_mode="HTML"
+    )
+    await message.answer_video_note(video_note_id, reply_markup=video_note_confirm_kb)
+
+@dp.callback_query(lambda c: c.data == "vn_confirm_send")
+async def vn_confirm_send(callback: types.CallbackQuery, state: FSMContext):
+    if not is_admin(callback.from_user.id):
+        await callback.answer("⛔ Нет доступа", show_alert=True)
+        return
+    await callback.answer()
+
+    data = await state.get_data()
+    video_note_id = data.get("video_note_id")
     users_list = list(users)
     total = len(users_list)
 
-    status_msg = await message.answer(
+    status_msg = await callback.message.answer(
         f"🚀 <b>Начинаю рассылку круглого видео...</b>\n\n"
         f"👥 Получателей: {total}\n\n"
         f"<i>Пожалуйста, подождите...</i>",
@@ -742,8 +773,18 @@ async def process_video_note_broadcast(message: types.Message, state: FSMContext
         f"<i>Круглое видео получили {success} из {total} пользователей</i>",
         parse_mode="HTML"
     )
-
     await state.clear()
+
+@dp.callback_query(lambda c: c.data == "vn_cancel")
+async def vn_cancel(callback: types.CallbackQuery, state: FSMContext):
+    if not is_admin(callback.from_user.id):
+        await callback.answer("⛔ Нет доступа", show_alert=True)
+        return
+    await callback.answer()
+    await state.clear()
+    await callback.message.answer(
+        "❌ Рассылка отменена.\n\nВернуться: /admin"
+    )
 
 # ---------- ЗАПУСК ----------
 async def main():
